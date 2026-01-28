@@ -772,19 +772,10 @@
         this._activeLights = lights;
         
         // Generate point light shadows
+        // NOTE: Point light shadows only use region map for shadow casting.
+        // Walls receive shadows but don't cast them - wall lighting is handled
+        // in the main lighting shader via tile type detection.
         if (lights.length > 0 && renderer) {
-            // Set tile type map for point light shadow filter
-            if (config.wallShadowEnabled && tileTypeMapGenerator && tileTypeMapGenerator.texture) {
-                if (shadowMapGenerator.pointLightFilter) {
-                    shadowMapGenerator.pointLightFilter.setTileTypeMap(
-                        tileTypeMapGenerator.texture,
-                        tileTypeMapGenerator.width,
-                        tileTypeMapGenerator.height,
-                        tileTypeMapGenerator.padding
-                    );
-                    shadowMapGenerator.pointLightFilter.setWallShadowEnabled(true);
-                }
-            }
             shadowMapGenerator.generatePointLightShadows(lights, renderer);
         }
         

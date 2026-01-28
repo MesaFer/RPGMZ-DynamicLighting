@@ -77,7 +77,8 @@
             const mode = this._obstacleMode;
             const useRegions = (mode === 'regions' || mode === 'both');
             const useTileDetector = (mode === 'tiledetector' || mode === 'both');
-            const hasTileDetector = useTileDetector && window.TileTypeDetector && $gameMap.isAnyWallTile;
+            // Check for tile detector: either standalone plugin or modular DynamicLighting version
+            const hasTileDetector = useTileDetector && $gameMap.isAnyWallTile;
             
             // Fill region map
             for (let y = 0; y < height; y++) {

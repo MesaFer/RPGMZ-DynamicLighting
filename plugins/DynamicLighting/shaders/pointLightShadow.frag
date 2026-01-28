@@ -69,20 +69,13 @@ int sampleTileType(vec2 worldPixelPos) {
     return TILE_NONE;
 }
 
-// Check if position is obstacle (region or wall)
+// Check if position is obstacle for shadow casting
+// IMPORTANT: Only use regions as shadow casters, NOT walls
+// Walls receive shadows and have special lighting logic in the main shader
+// Including walls here would cause them to block their own light
 bool isObstacle(vec2 worldPixelPos) {
-    if (sampleRegion(worldPixelPos) > 0.5) {
-        return true;
-    }
-    
-    if (uWallShadowEnabled) {
-        int wallType = sampleTileType(worldPixelPos);
-        if (wallType == TILE_WALL_SIDE || wallType == TILE_WALL_TOP) {
-            return true;
-        }
-    }
-    
-    return false;
+    // Only sample region map - walls are NOT shadow casters
+    return sampleRegion(worldPixelPos) > 0.5;
 }
 
 // Angle difference with wrap-around
