@@ -40,53 +40,6 @@
  * @default 8
  * @desc Blur amount for soft shadow edges (PCF samples)
  *
- * @param SunShadowSoftness
- * @text Sun Shadow Softness
- * @type number
- * @decimals 1
- * @min 0
- * @max 50
- * @default 0
- * @desc Blur amount for sun shadows. 0 = sharp (clear day), higher = blurry (cloudy)
- *
- * @param SunShadowPrecision
- * @text Sun Shadow Precision
- * @type number
- * @min 1
- * @max 16
- * @default 2
- * @desc Ray march step size in pixels. Lower = more precise but slower. 1-2 for sharp, 4-8 for soft.
- *
- * @param SunShadowStrength
- * @text Sun Shadow Strength
- * @type number
- * @decimals 2
- * @min 0
- * @max 1
- * @default 0.85
- * @desc How dark the shadows are. 0 = no shadow, 1 = completely black.
- *
- * @param SunShadowLength
- * @text Sun Shadow Length
- * @type number
- * @decimals 1
- * @min 0.5
- * @max 10
- * @default 3.0
- * @desc How many tiles the sun shadow extends from obstacles.
- *
- * @param SunShadowFalloff
- * @text Sun Shadow Falloff
- * @type select
- * @option None (Sharp)
- * @value none
- * @option Linear
- * @value linear
- * @option Smooth
- * @value smooth
- * @default smooth
- * @desc How shadows fade with distance. None = sharp edges, Smooth = gradual fade.
- *
  * @param WallShadowEnabled
  * @text Wall Geometry Shadows
  * @type boolean
@@ -95,15 +48,14 @@
  *
  * @help
  * ============================================================================
- * Dynamic Lighting Shadows v8.5 - Sun Shadows on Walls (Point Light Logic)
+ * Dynamic Lighting Shadows v8.6 - Simplified Sun Shadow System
  * ============================================================================
  *
- * NEW IN v8.5: Sun shadows on wall sides now use the same logic as point lights!
- *   - Wall sides are lit when sun shines from above (sunDir.y > 0)
- *   - Shadow on wall side is determined by checking the FLOOR below the wall
- *   - If the floor directly below the wall is in shadow, the wall is also shadowed
- *   - This matches exactly how point lights handle wall shadows
+ * v8.6: Simplified sun shadow system
+ *   - Removed obstacle-based shadow direction changes for sun shadows
+ *   - Sun shadows now follow the sun direction consistently
  *   - Wall tops remain fully lit (they face upward toward the sun)
+ *   - Wall sides are rendered fully lit in the shadow map
  *
  * v8.3: Fixed crash when transitioning between maps!
  *   - Fixed "Cannot read properties of null (reading 'parentTextureArray')" error
@@ -823,72 +775,6 @@
             return -1.0; // No hit
         }
         
-        // Find the bottom Y coordinate of a wall (in world pixels)
-        // Searches downward from the current tile to find where the wall ends
-        // Returns the Y coordinate of the bottom edge of the wall (in world pixels)
-        float findWallBottomY(vec2 currentTilePos) {
-            float bottomTileY = currentTilePos.y;
-            
-            // Search downward for up to 8 tiles to find the bottom of the wall
-            for (int i = 1; i <= 8; i++) {
-                vec2 checkTile = vec2(currentTilePos.x, currentTilePos.y + float(i));
-                // Sample tile type at the center of the tile
-                vec2 checkWorldPos = (checkTile + 0.5) * uTileSize;
-                int checkTileType = sampleTileType(checkWorldPos);
-                
-                // If we find another WALL_SIDE, update the bottom
-                if (checkTileType == TILE_WALL_SIDE) {
-                    bottomTileY = checkTile.y;
-                } else {
-                    // Wall ended, stop searching
-                    break;
-                }
-            }
-            
-            // Return the bottom edge of the bottom-most wall tile (in world pixels)
-            return (bottomTileY + 1.0) * uTileSize.y;
-        }
-        
-        // Trace ray from a floor position toward the sun to check if it's in shadow
-        // This is used for wall sides - we check if the floor below the wall is shadowed
-        // Returns: shadow value (1.0 = fully lit, lower = in shadow)
-        float traceFloorShadow(vec2 floorWorldPos, float maxDist) {
-            float stepSize = 1.0;
-            int maxSteps = int(maxDist / stepSize);
-            if (maxSteps > 512) maxSteps = 512;
-            
-            vec2 lastTilePos = floor(floorWorldPos / uTileSize);
-            
-            for (int i = 1; i <= 512; i++) {
-                if (i > maxSteps) break;
-                
-                float dist = float(i) * stepSize;
-                vec2 samplePos = floorWorldPos + uSunDirection * dist;
-                vec2 sampleTilePos = floor(samplePos / uTileSize);
-                
-                if (sampleTilePos != lastTilePos) {
-                    lastTilePos = sampleTilePos;
-                    
-                    if (sampleRegion(samplePos) > 0.5) {
-                        // Hit an obstacle - floor is in shadow
-                        // Calculate shadow strength based on distance
-                        float normalizedDist = dist / maxDist;
-                        
-                        if (uFalloffType == 0) {
-                            return 1.0 - uShadowStrength;
-                        } else if (uFalloffType == 1) {
-                            return 1.0 - uShadowStrength * (1.0 - normalizedDist);
-                        } else {
-                            float falloff = normalizedDist * normalizedDist;
-                            return 1.0 - uShadowStrength * (1.0 - falloff);
-                        }
-                    }
-                }
-            }
-            
-            return 1.0; // No obstacle found - fully lit
-        }
-        
         void main(void) {
             vec2 pixelPos = vTextureCoord * uResolution;
             vec2 worldPos = pixelPos + uDisplayOffset;
@@ -908,21 +794,21 @@
                 return;
             }
             
-            // Wall sides: output 1.0 (fully lit) in the shadow map
-            // The main shader (DynamicLighting.js) will handle projecting shadows onto walls
-            // by sampling the floor position below the wall
+            // Wall sides: render as fully lit in shadow map
+            // The actual shadow will be sampled from floor position in the main shader
             if (tileType == TILE_WALL_SIDE) {
                 gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0);
                 return;
             }
             
-            // Regular obstacles (non-wall) are fully lit (they cast shadows, not receive them)
-            if (isOnObstacle) {
+            // Regular obstacles (NOT wall sides or wall tops) are fully lit
+            // They cast shadows, not receive them
+            if (isOnObstacle && tileType == TILE_NONE) {
                 gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0);
                 return;
             }
             
-            // For non-obstacle pixels (floor/ground), trace toward the sun to find blocking obstacles
+            // For floor pixels, trace toward the sun to find blocking obstacles
             float maxDistPixels = uShadowLength * uTileSize.x;
             int hitTileType = TILE_NONE;
             float hitDist = traceRay(worldPos, uSunDirection, maxDistPixels, hitTileType);
@@ -1877,84 +1763,10 @@
             this._lightingFilter.uniforms.uWallShadowEnabled = false;
         }
         
-        // GPU-based sun shadow generation
-        // Only generate sun shadows if sun is enabled AND has sufficient intensity
-        // At night (intensity ~0), shadows should not be visible
-        const sunIntensity = $gameMap._sunLight ? $gameMap._sunLight.intensity : 0;
-        const sunShadowThreshold = 0.1; // Minimum sun intensity to cast shadows
-        const shouldRenderSunShadows = $gameMap._sunLight &&
-                                       $gameMap._sunLight.enabled &&
-                                       sunIntensity >= sunShadowThreshold;
-        
-        if (shouldRenderSunShadows) {
-            // Get sun shadow settings from map or use defaults
-            const sunShadowSettings = $gameMap._sunShadowSettings || {};
-            const sunDirection = $gameMap._sunLight.direction;
-            
-            // Scale shadow strength based on sun intensity
-            // This makes shadows fade as the sun sets
-            const intensityFactor = Math.min(1.0, (sunIntensity - sunShadowThreshold) / (1.0 - sunShadowThreshold));
-            const adjustedSettings = Object.assign({}, sunShadowSettings);
-            adjustedSettings.strength = (sunShadowSettings.strength || CONFIG.sunShadowStrength) * intensityFactor;
-            
-            if (renderer) {
-                // Connect TileTypeDetector's tile type map to the shadow system
-                // This enables wall geometry-aware shadows
-                if (CONFIG.wallShadowEnabled && window.TileTypeDetector) {
-                    const tileTypeGen = window.TileTypeDetector.tileTypeMapGenerator;
-                    
-                    // Debug logging
-                    if (this._shadowDebugFrame % 300 === 1) {
-                        log('TileTypeDetector check:');
-                        log('  - tileTypeGen exists:', !!tileTypeGen);
-                        log('  - tileTypeGen.texture:', tileTypeGen ? !!tileTypeGen.texture : 'N/A');
-                        log('  - sunShadowFilter exists:', !!shadowMapGenerator.sunShadowFilter);
-                        if (tileTypeGen && tileTypeGen._canvas) {
-                            log('  - canvas size:', tileTypeGen._canvas.width, 'x', tileTypeGen._canvas.height);
-                        }
-                    }
-                    
-                    if (tileTypeGen && tileTypeGen.texture && shadowMapGenerator.sunShadowFilter) {
-                        const tileTypePadding = tileTypeGen._padding || 2;
-                        const tileTypeWidth = tileTypeGen._canvas ? tileTypeGen._canvas.width : 20;
-                        const tileTypeHeight = tileTypeGen._canvas ? tileTypeGen._canvas.height : 15;
-                        
-                        shadowMapGenerator.sunShadowFilter.setTileTypeMap(
-                            tileTypeGen.texture,
-                            tileTypeWidth,
-                            tileTypeHeight,
-                            tileTypePadding
-                        );
-                        shadowMapGenerator.sunShadowFilter.setWallShadowEnabled(true);
-                        
-                        if (this._shadowDebugFrame % 300 === 1) {
-                            log('Wall shadows ENABLED, tile type map set');
-                            log('  - _hasTileTypeMap:', shadowMapGenerator.sunShadowFilter._hasTileTypeMap);
-                            log('  - uWallShadowEnabled:', shadowMapGenerator.sunShadowFilter.uniforms.uWallShadowEnabled);
-                        }
-                    }
-                } else if (shadowMapGenerator.sunShadowFilter) {
-                    // Disable wall shadows if TileTypeDetector is not available
-                    shadowMapGenerator.sunShadowFilter.setWallShadowEnabled(false);
-                }
-                
-                // Generate sun shadows on GPU using render-to-texture
-                // Use adjustedSettings which has strength scaled by sun intensity
-                shadowMapGenerator.generateSunShadowsGPU(sunDirection, adjustedSettings, renderer);
-                
-                // Pass the GPU-generated shadow texture to main lighting filter
-                if (this._lightingFilter.setSunShadowMap) {
-                    this._lightingFilter.setSunShadowMap(
-                        shadowMapGenerator.sunShadowTexture,
-                        true
-                    );
-                }
-            }
-        } else {
-            // Disable sun shadows
-            if (this._lightingFilter.setSunShadowMap) {
-                this._lightingFilter.setSunShadowMap(null, false);
-            }
+        // SUN SHADOWS DISABLED - removed all sun shadow generation code
+        // Sun lighting still works (intensity, color) but no shadows
+        if (this._lightingFilter.setSunShadowMap) {
+            this._lightingFilter.setSunShadowMap(null, false);
         }
         
         // IMPORTANT: Use the SAME light list as the main lighting system
@@ -2206,6 +2018,6 @@
         }
     };
 
-    log('Plugin loaded v8.5 - Sun Shadows on Walls (Point Light Logic)');
+    log('Plugin loaded v8.6 - Simplified Sun Shadow System');
 
 })();

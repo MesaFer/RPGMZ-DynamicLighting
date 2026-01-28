@@ -427,7 +427,6 @@
             #define PI 3.14159265359
             #define TWO_PI 6.28318530718
             #define SUN_SHADOW_STEPS 32
-            #define MAX_WALL_HEIGHT 8
             
             // Tile type constants
             #define TILE_NONE 0
@@ -527,8 +526,12 @@
                 return TILE_NONE;
             }
             
+            // Maximum height of walls in tiles (for point light shadows only)
+            #define MAX_WALL_HEIGHT 8
+            
             // Find the bottom Y coordinate of a wall (in world pixels)
             // Searches downward from the current tile to find where the wall ends
+            // Used for POINT LIGHT shadows only - sun shadows don't use this
             float findWallBottomY(vec2 currentTilePos) {
                 float bottomTileY = currentTilePos.y;
                 
@@ -830,15 +833,9 @@
                 return lightColor * att;
             }
             
-            // Sun shadow using GPU-generated shadow map (render-to-texture)
+            // Sun shadows disabled - always return fully lit
             float calculateSunShadow(vec2 pixelPos) {
-                if (!uSunShadowsEnabled) return 1.0;
-                
-                // Sample GPU-generated sun shadow map
-                vec2 shadowUV = pixelPos / uResolution;
-                float shadow = texture2D(uSunShadowMap, shadowUV).r;
-                
-                return shadow;
+                return 1.0;
             }
             
             // Sample sprite shadow map (from DynamicLighting_SpriteShadows)
@@ -852,104 +849,20 @@
                 return shadow;
             }
             
-            // Calculate sun light contribution with GPU-based shadows
-            // The sun shadow map is 2D and contains shadows for FLOOR pixels.
-            //
-            // For wall sides, we use a HEIGHT-AWARE approach:
-            // - Wall is a vertical surface with normal pointing toward player (down on screen)
-            // - For each wall pixel at height h, we check if the shadow on the floor
-            //   extends far enough to cast onto this height
+            // Calculate sun light contribution (NO SHADOWS - shadows disabled)
             vec3 calculateSunLight(vec2 pixelPos, bool onObstacle, int tileType) {
                 if (!uSunEnabled || uSunIntensity <= 0.0) return vec3(0.0);
                 
-                float shadow = 1.0;
-                
-                // Sun direction vector
+                // Sun direction vector for subtle gradient only
                 vec2 sunDir = vec2(cos(uSunDirection), sin(uSunDirection));
-                
-                if (tileType == TILE_WALL_TOP) {
-                    // Wall tops are always fully lit (horizontal surface facing up)
-                    shadow = 1.0;
-                } else if (tileType == TILE_WALL_SIDE) {
-                    // Wall sides: HEIGHT-AWARE shadow projection
-                    //
-                    // For a pixel at height h above floor:
-                    // 1. First check if floor directly below is in shadow
-                    // 2. If yes, calculate if shadow reaches this height based on sun angle
-                    
-                    vec2 worldPos = pixelPos + uDisplayOffset;
-                    vec2 tilePos = floor(worldPos / uTileSize);
-                    
-                    // Find the bottom of the entire wall structure
-                    float wallBottomY = findWallBottomY(tilePos);
-                    
-                    // Height of this pixel above the floor (in pixels)
-                    // Clamp to positive values to avoid issues with pixels at or below floor level
-                    float heightAboveFloor = max(0.0, wallBottomY - worldPos.y);
-                    
-                    // First, check shadow at the floor directly below this wall pixel
-                    vec2 floorWorldPos = vec2(worldPos.x, wallBottomY + 1.0);
-                    vec2 floorScreenPos = floorWorldPos - uDisplayOffset;
-                    float floorShadowBelow = calculateSunShadow(floorScreenPos);
-                    
-                    // If floor directly below is fully lit, wall is fully lit
-                    if (floorShadowBelow > 0.99) {
-                        shadow = 1.0;
-                    } else {
-                        // Floor below has shadow - now check if shadow reaches this height
-                        //
-                        // For shadow to reach height h on wall, the shadow on floor must
-                        // extend a certain distance from the wall base in the direction
-                        // where the sun is coming from.
-                        //
-                        // Distance needed: h * |sunDirX / sunDirY|
-                        // Direction: opposite to sunDir.x (shadow extends away from sun)
-                        
-                        if (abs(sunDir.y) > 0.01 && abs(sunDir.x) > 0.01) {
-                            // Sun has both horizontal and vertical components
-                            // Calculate required floor distance for shadow to reach this height
-                            float requiredFloorDist = heightAboveFloor * abs(sunDir.x / sunDir.y);
-                            
-                            // Sample shadow at the required distance from wall base
-                            // Direction: opposite to sun's horizontal component
-                            // (shadow extends in the direction opposite to where sun is)
-                            float sampleOffsetX = -sign(sunDir.x) * requiredFloorDist;
-                            vec2 sampleWorldPos = vec2(worldPos.x + sampleOffsetX, wallBottomY + 1.0);
-                            vec2 sampleScreenPos = sampleWorldPos - uDisplayOffset;
-                            
-                            // Sample shadow at the calculated distance
-                            // This is the key: we only use the shadow at the distance
-                            // that corresponds to this pixel's height
-                            shadow = calculateSunShadow(sampleScreenPos);
-                        } else if (abs(sunDir.y) > 0.01) {
-                            // Sun is mostly vertical - shadow goes straight up the wall
-                            // Use the floor shadow directly
-                            shadow = floorShadowBelow;
-                        } else {
-                            // Sun is mostly horizontal - shadow doesn't climb wall much
-                            // Only bottom of wall gets shadow
-                            if (heightAboveFloor < uTileSize.y * 0.5) {
-                                shadow = floorShadowBelow;
-                            } else {
-                                shadow = 1.0;
-                            }
-                        }
-                    }
-                } else if (onObstacle) {
-                    // Regular obstacles are fully lit (they cast shadows, not receive them)
-                    shadow = 1.0;
-                } else {
-                    // Floor/ground - sample shadow map directly
-                    shadow = calculateSunShadow(pixelPos);
-                }
                 
                 // Calculate a subtle gradient based on position to simulate 3D lighting
                 vec2 normalizedPos = pixelPos / uResolution;
                 float directionalFactor = 0.9 + 0.1 * dot(normalizedPos - 0.5, sunDir);
                 directionalFactor = clamp(directionalFactor, 0.7, 1.0);
                 
-                // Apply intensity, color and shadow
-                float att = uSunIntensity * directionalFactor * shadow;
+                // Apply intensity and color (no shadows)
+                float att = uSunIntensity * directionalFactor;
                 
                 return uSunColor * att;
             }
