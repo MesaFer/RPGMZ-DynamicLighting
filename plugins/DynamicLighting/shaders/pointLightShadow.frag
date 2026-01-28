@@ -70,11 +70,8 @@ int sampleTileType(vec2 worldPixelPos) {
 }
 
 // Check if position is obstacle for shadow casting
-// IMPORTANT: Only use regions as shadow casters, NOT walls
-// Walls receive shadows and have special lighting logic in the main shader
-// Including walls here would cause them to block their own light
+// Uses region map which includes both regions and wall tiles
 bool isObstacle(vec2 worldPixelPos) {
-    // Only sample region map - walls are NOT shadow casters
     return sampleRegion(worldPixelPos) > 0.5;
 }
 
