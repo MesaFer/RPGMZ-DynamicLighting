@@ -68,16 +68,20 @@ int sampleTileType(vec2 worldPixelPos) {
 
 // Trace ray to find obstacle
 // Returns: distance in pixels to first obstacle hit, or -1 if no hit
-float traceRay(vec2 startPos, vec2 rayDir, float maxDist, out int outTileType) {
+// startType: the tile type we're starting from (to skip connected walls)
+// startY: the Y position we're starting from (to ignore walls above when starting from wall)
+float traceRay(vec2 startPos, vec2 rayDir, float maxDist, int startType, float startY, out int outTileType) {
     outTileType = TILE_NONE;
     
     // Use sub-pixel stepping for accurate results
-    // Step size of 0.5 pixels ensures we don't miss any tile boundaries
     float stepSize = 0.5;
     int maxSteps = int(maxDist / stepSize) + 1;
     
     // Limit max steps to prevent infinite loops
     if (maxSteps > 1024) maxSteps = 1024;
+    
+    // Track if we've left the starting wall group
+    bool leftStartingWall = false;
     
     for (int i = 1; i <= 1024; i++) {
         if (i > maxSteps) break;
@@ -85,23 +89,37 @@ float traceRay(vec2 startPos, vec2 rayDir, float maxDist, out int outTileType) {
         float dist = float(i) * stepSize;
         vec2 samplePos = startPos + rayDir * dist;
         
-        // Check if this position is an obstacle (region or wall)
-        bool isObstacle = sampleRegion(samplePos) > 0.5;
+        // Check if this position is marked as obstacle in regionMap
+        bool isInRegionMap = sampleRegion(samplePos) > 0.5;
         
-        // Also check for wall tiles if wall shadows enabled
-        if (uWallShadowEnabled && !isObstacle) {
-            int wallType = sampleTileType(samplePos);
-            if (wallType == TILE_WALL_SIDE || wallType == TILE_WALL_TOP) {
-                isObstacle = true;
-                outTileType = wallType;
+        if (isInRegionMap) {
+            // Check what type of tile this is
+            int hitType = TILE_NONE;
+            if (uWallShadowEnabled) {
+                hitType = sampleTileType(samplePos);
             }
-        }
-        
-        if (isObstacle) {
-            if (uWallShadowEnabled && outTileType == TILE_NONE) {
-                outTileType = sampleTileType(samplePos);
+            
+            // If we started on WALL_SIDE, skip all connected WALL_SIDE tiles
+            if (startType == TILE_WALL_SIDE && hitType == TILE_WALL_SIDE && !leftStartingWall) {
+                // Still in connected wall, keep going
+                continue;
             }
+            
+            // If we started on WALL_SIDE and hit another WALL_SIDE that is ABOVE us
+            // (smaller Y = higher on screen), ignore it - walls don't shadow other walls below
+            if (startType == TILE_WALL_SIDE && hitType == TILE_WALL_SIDE && samplePos.y < startY) {
+                // Wall above us - skip it, don't count as shadow
+                continue;
+            }
+            
+            // We found an obstacle that's not part of our starting wall
+            outTileType = hitType;
             return dist;
+        } else {
+            // We left the obstacle - mark that we're no longer in starting wall
+            if (startType == TILE_WALL_SIDE) {
+                leftStartingWall = true;
+            }
         }
     }
     
@@ -112,15 +130,11 @@ void main(void) {
     vec2 pixelPos = vTextureCoord * uResolution;
     vec2 worldPos = pixelPos + uDisplayOffset;
     
-    bool isOnObstacle = sampleRegion(worldPos) > 0.5;
+    bool isOnRegionObstacle = sampleRegion(worldPos) > 0.5;
     
     int tileType = TILE_NONE;
     if (uWallShadowEnabled) {
         tileType = sampleTileType(worldPos);
-        // Wall tiles also count as obstacles
-        if (tileType == TILE_WALL_SIDE || tileType == TILE_WALL_TOP) {
-            isOnObstacle = true;
-        }
     }
     
     // Wall tops always fully lit
@@ -129,14 +143,11 @@ void main(void) {
         return;
     }
     
-    // Wall sides: output 1.0, main shader handles projection
-    if (tileType == TILE_WALL_SIDE) {
-        gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0);
-        return;
-    }
+    // WALL_SIDE: trace ray to find shadows (same as floor)
+    // Do NOT return early - let it trace
     
-    // Regular obstacles fully lit
-    if (isOnObstacle) {
+    // Region obstacles (not walls) are fully lit - they cast shadows but don't receive
+    if (isOnRegionObstacle && tileType == TILE_NONE) {
         gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0);
         return;
     }
@@ -144,7 +155,7 @@ void main(void) {
     // Trace toward sun
     float maxDistPixels = uShadowLength * uTileSize.x;
     int hitTileType = TILE_NONE;
-    float hitDist = traceRay(worldPos, uSunDirection, maxDistPixels, hitTileType);
+    float hitDist = traceRay(worldPos, uSunDirection, maxDistPixels, tileType, worldPos.y, hitTileType);
     
     float shadow = 1.0;
     

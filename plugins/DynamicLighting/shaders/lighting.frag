@@ -379,37 +379,28 @@ vec3 calculateSunLight(vec2 pixelPos, bool onObstacle, int tileType) {
     float shadow = 1.0;
     vec2 sunDir = vec2(cos(uSunDirection), sin(uSunDirection));
     
+    // Wall facing factor for WALL_SIDE
+    // WALL_SIDE faces "south" (positive Y in screen coordinates)
+    // Wall normal is (0, 1) pointing down
+    float wallFacingFactor = 1.0;
+    
     if (tileType == TILE_WALL_TOP) {
         shadow = 1.0;
     } else if (tileType == TILE_WALL_SIDE) {
-        vec2 worldPos = pixelPos + uDisplayOffset;
-        vec2 tilePos = floor(worldPos / uTileSize);
-        float wallBottomY = findWallBottomY(tilePos);
-        float heightAboveFloor = max(0.0, wallBottomY - worldPos.y);
+        // Wall sides: sample 2D shadow map directly, same as floor
+        shadow = calculateSunShadow(pixelPos);
         
-        vec2 floorWorldPos = vec2(worldPos.x, wallBottomY + 1.0);
-        vec2 floorScreenPos = floorWorldPos - uDisplayOffset;
-        float floorShadowBelow = calculateSunShadow(floorScreenPos);
-        
-        if (floorShadowBelow > 0.99) {
-            shadow = 1.0;
-        } else {
-            if (abs(sunDir.y) > 0.01 && abs(sunDir.x) > 0.01) {
-                float requiredFloorDist = heightAboveFloor * abs(sunDir.x / sunDir.y);
-                float sampleOffsetX = -sign(sunDir.x) * requiredFloorDist;
-                vec2 sampleWorldPos = vec2(worldPos.x + sampleOffsetX, wallBottomY + 1.0);
-                vec2 sampleScreenPos = sampleWorldPos - uDisplayOffset;
-                shadow = calculateSunShadow(sampleScreenPos);
-            } else if (abs(sunDir.y) > 0.01) {
-                shadow = floorShadowBelow;
-            } else {
-                if (heightAboveFloor < uTileSize.y * 0.5) {
-                    shadow = floorShadowBelow;
-                } else {
-                    shadow = 1.0;
-                }
-            }
-        }
+        // Calculate wall facing factor based on sun direction
+        // Wall normal points in +Y direction (down/south)
+        // Sun direction points TO sun
+        // If sunDir.y > 0, sun is below horizon (shining up) - wall is lit
+        // If sunDir.y < 0, sun is above horizon (shining down) - wall is in shadow
+        // The closer sunDir.y to 1, the more direct light on wall
+        // sunDir.y ranges from -1 (sun directly above) to 1 (sun directly below)
+        // We want: sunDir.y = 1 -> wallFacingFactor = 1.0 (fully lit)
+        //          sunDir.y = 0 -> wallFacingFactor = 0.5 (half lit)
+        //          sunDir.y = -1 -> wallFacingFactor = 0.0 (no light)
+        wallFacingFactor = clamp(sunDir.y * 0.5 + 0.5, 0.0, 1.0);
     } else if (onObstacle) {
         shadow = 1.0;
     } else {
@@ -420,7 +411,7 @@ vec3 calculateSunLight(vec2 pixelPos, bool onObstacle, int tileType) {
     float directionalFactor = 0.9 + 0.1 * dot(normalizedPos - 0.5, sunDir);
     directionalFactor = clamp(directionalFactor, 0.7, 1.0);
     
-    float att = uSunIntensity * directionalFactor * shadow;
+    float att = uSunIntensity * directionalFactor * shadow * wallFacingFactor;
     return uSunColor * att;
 }
 
@@ -447,6 +438,46 @@ void main(void) {
             return;
         } else if (onObstacle) {
             gl_FragColor = vec4(0.0, 0.0, 1.0, 1.0);
+            return;
+        }
+    }
+    
+    // Debug mode 3: Show projected sun shadow on WALL_SIDE (same logic as calculateSunLight)
+    if (uDebugMode == 3 && tileType == TILE_WALL_SIDE) {
+        vec2 sunDir = vec2(cos(uSunDirection), sin(uSunDirection));
+        vec2 worldPos = pixelPos + uDisplayOffset;
+        vec2 tilePos = floor(worldPos / uTileSize);
+        float wallBottomY = findWallBottomY(tilePos);
+        float heightAboveFloor = max(0.0, wallBottomY - worldPos.y);
+        
+        float projectedShadow = 1.0;
+        vec2 floorWorldPos = vec2(worldPos.x, wallBottomY + 1.0);
+        vec2 floorScreenPos = floorWorldPos - uDisplayOffset;
+        float floorShadowBelow = calculateSunShadow(floorScreenPos);
+        
+        if (floorShadowBelow > 0.99) {
+            projectedShadow = 1.0;
+        } else {
+            if (abs(sunDir.y) > 0.01 && abs(sunDir.x) > 0.01) {
+                float requiredFloorDist = heightAboveFloor * abs(sunDir.x / sunDir.y);
+                float sampleOffsetX = -sign(sunDir.x) * requiredFloorDist;
+                vec2 sampleWorldPos = vec2(worldPos.x + sampleOffsetX, wallBottomY + 1.0);
+                vec2 sampleScreenPos = sampleWorldPos - uDisplayOffset;
+                projectedShadow = calculateSunShadow(sampleScreenPos);
+            } else if (abs(sunDir.y) > 0.01) {
+                projectedShadow = floorShadowBelow;
+            } else {
+                if (heightAboveFloor < uTileSize.y * 0.5) {
+                    projectedShadow = floorShadowBelow;
+                } else {
+                    projectedShadow = 1.0;
+                }
+            }
+        }
+        
+        // Show RED where shadow is projected onto wall (shadow < 1)
+        if (projectedShadow < 0.99) {
+            gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0);
             return;
         }
     }

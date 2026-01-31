@@ -100,8 +100,10 @@
                         }
                         
                         // Check TileTypeDetector
+                        // Only WALL_SIDE is obstacle for sun shadows
+                        // WALL_TOP does not cast shadows
                         if (!isObstacle && hasTileDetector) {
-                            if ($gameMap.isAnyWallTile(tileX, tileY)) {
+                            if ($gameMap.isWallSideTile(tileX, tileY)) {
                                 isObstacle = true;
                             }
                         }
