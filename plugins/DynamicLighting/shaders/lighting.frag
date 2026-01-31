@@ -442,41 +442,11 @@ void main(void) {
         }
     }
     
-    // Debug mode 3: Show projected sun shadow on WALL_SIDE (same logic as calculateSunLight)
+    // Debug mode 3: Show sun shadow pixels that fall on WALL_SIDE (RED)
     if (uDebugMode == 3 && tileType == TILE_WALL_SIDE) {
-        vec2 sunDir = vec2(cos(uSunDirection), sin(uSunDirection));
-        vec2 worldPos = pixelPos + uDisplayOffset;
-        vec2 tilePos = floor(worldPos / uTileSize);
-        float wallBottomY = findWallBottomY(tilePos);
-        float heightAboveFloor = max(0.0, wallBottomY - worldPos.y);
-        
-        float projectedShadow = 1.0;
-        vec2 floorWorldPos = vec2(worldPos.x, wallBottomY + 1.0);
-        vec2 floorScreenPos = floorWorldPos - uDisplayOffset;
-        float floorShadowBelow = calculateSunShadow(floorScreenPos);
-        
-        if (floorShadowBelow > 0.99) {
-            projectedShadow = 1.0;
-        } else {
-            if (abs(sunDir.y) > 0.01 && abs(sunDir.x) > 0.01) {
-                float requiredFloorDist = heightAboveFloor * abs(sunDir.x / sunDir.y);
-                float sampleOffsetX = -sign(sunDir.x) * requiredFloorDist;
-                vec2 sampleWorldPos = vec2(worldPos.x + sampleOffsetX, wallBottomY + 1.0);
-                vec2 sampleScreenPos = sampleWorldPos - uDisplayOffset;
-                projectedShadow = calculateSunShadow(sampleScreenPos);
-            } else if (abs(sunDir.y) > 0.01) {
-                projectedShadow = floorShadowBelow;
-            } else {
-                if (heightAboveFloor < uTileSize.y * 0.5) {
-                    projectedShadow = floorShadowBelow;
-                } else {
-                    projectedShadow = 1.0;
-                }
-            }
-        }
-        
-        // Show RED where shadow is projected onto wall (shadow < 1)
-        if (projectedShadow < 0.99) {
+        float sunShadow = calculateSunShadow(pixelPos);
+        // If shadow < 1.0, there's a shadow on this wall pixel
+        if (sunShadow < 0.99) {
             gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0);
             return;
         }

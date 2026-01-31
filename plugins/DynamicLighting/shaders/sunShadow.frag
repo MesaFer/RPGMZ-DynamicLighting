@@ -17,16 +17,14 @@ uniform float uTileTypePadding;
 uniform vec2 uSunDirection;
 uniform float uShadowLength;
 uniform float uShadowStrength;
-uniform float uStepSize;         // Step size for ray marching (precision)
+uniform float uStepSize;
 uniform int uFalloffType;
 uniform bool uWallShadowEnabled;
 
-// Tile type constants
 #define TILE_NONE 0
 #define TILE_WALL_SIDE 1
 #define TILE_WALL_TOP 2
 
-// Sample region map
 float sampleRegion(vec2 worldPixelPos) {
     vec2 displayTile = floor(uDisplayOffsetInt / uTileSize);
     vec2 adjustedPos = worldPixelPos + 0.001;
@@ -41,7 +39,6 @@ float sampleRegion(vec2 worldPixelPos) {
     return texture2D(uRegionMap, regionUV).r > 0.5 ? 1.0 : 0.0;
 }
 
-// Sample tile type
 int sampleTileType(vec2 worldPixelPos) {
     vec2 displayTile = floor(uDisplayOffsetInt / uTileSize);
     vec2 adjustedPos = worldPixelPos + 0.001;
@@ -55,7 +52,6 @@ int sampleTileType(vec2 worldPixelPos) {
     
     vec4 tileType = texture2D(uTileTypeMap, tileTypeUV);
     
-    // Detect invalid WHITE texture
     if (tileType.r > 0.5 && tileType.g > 0.5) {
         return TILE_NONE;
     }
@@ -66,21 +62,36 @@ int sampleTileType(vec2 worldPixelPos) {
     return TILE_NONE;
 }
 
-// Trace ray to find obstacle
-// Returns: distance in pixels to first obstacle hit, or -1 if no hit
-// startType: the tile type we're starting from (to skip connected walls)
-// startY: the Y position we're starting from (to ignore walls above when starting from wall)
+// Find the BOTTOM Y position of WALL_SIDE column (where wall meets floor)
+float findWallBottomY(vec2 worldPixelPos) {
+    float tileHeight = uTileSize.y;
+    vec2 currentTile = floor(worldPixelPos / uTileSize);
+    float lastWallSideY = (currentTile.y + 1.0) * tileHeight;
+    
+    for (int i = 0; i < 20; i++) {
+        float checkTileY = currentTile.y + float(i);
+        vec2 checkPos = vec2(worldPixelPos.x, checkTileY * tileHeight + tileHeight * 0.5);
+        
+        int checkType = sampleTileType(checkPos);
+        
+        if (checkType == TILE_WALL_SIDE) {
+            lastWallSideY = (checkTileY + 1.0) * tileHeight;
+        } else {
+            break;
+        }
+    }
+    
+    return lastWallSideY;
+}
+
 float traceRay(vec2 startPos, vec2 rayDir, float maxDist, int startType, float startY, out int outTileType) {
     outTileType = TILE_NONE;
     
-    // Use sub-pixel stepping for accurate results
     float stepSize = 0.5;
     int maxSteps = int(maxDist / stepSize) + 1;
     
-    // Limit max steps to prevent infinite loops
     if (maxSteps > 1024) maxSteps = 1024;
     
-    // Track if we've left the starting wall group
     bool leftStartingWall = false;
     
     for (int i = 1; i <= 1024; i++) {
@@ -89,34 +100,25 @@ float traceRay(vec2 startPos, vec2 rayDir, float maxDist, int startType, float s
         float dist = float(i) * stepSize;
         vec2 samplePos = startPos + rayDir * dist;
         
-        // Check if this position is marked as obstacle in regionMap
         bool isInRegionMap = sampleRegion(samplePos) > 0.5;
         
         if (isInRegionMap) {
-            // Check what type of tile this is
             int hitType = TILE_NONE;
             if (uWallShadowEnabled) {
                 hitType = sampleTileType(samplePos);
             }
             
-            // If we started on WALL_SIDE, skip all connected WALL_SIDE tiles
             if (startType == TILE_WALL_SIDE && hitType == TILE_WALL_SIDE && !leftStartingWall) {
-                // Still in connected wall, keep going
                 continue;
             }
             
-            // If we started on WALL_SIDE and hit another WALL_SIDE that is ABOVE us
-            // (smaller Y = higher on screen), ignore it - walls don't shadow other walls below
             if (startType == TILE_WALL_SIDE && hitType == TILE_WALL_SIDE && samplePos.y < startY) {
-                // Wall above us - skip it, don't count as shadow
                 continue;
             }
             
-            // We found an obstacle that's not part of our starting wall
             outTileType = hitType;
             return dist;
         } else {
-            // We left the obstacle - mark that we're no longer in starting wall
             if (startType == TILE_WALL_SIDE) {
                 leftStartingWall = true;
             }
@@ -137,25 +139,45 @@ void main(void) {
         tileType = sampleTileType(worldPos);
     }
     
-    // Wall tops always fully lit
     if (tileType == TILE_WALL_TOP) {
         gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0);
         return;
     }
     
-    // WALL_SIDE: trace ray to find shadows (same as floor)
-    // Do NOT return early - let it trace
-    
-    // Region obstacles (not walls) are fully lit - they cast shadows but don't receive
     if (isOnRegionObstacle && tileType == TILE_NONE) {
         gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0);
         return;
     }
     
-    // Trace toward sun
+    // SKEW for WALL_SIDE: shift X based on distance from wall bottom
+    vec2 sampleWorldPos = worldPos;
+    
+    if (tileType == TILE_WALL_SIDE && abs(uSunDirection.y) > 0.001) {
+        float wallBottomY = findWallBottomY(worldPos);
+        float distFromBottom = wallBottomY - worldPos.y;
+        float skewRatio = uSunDirection.x / uSunDirection.y;
+        float skewedX = worldPos.x - distFromBottom * skewRatio;
+        
+        // Check if the skewed position lands on another WALL_SIDE tile
+        // If so, allow the skew; otherwise, clamp to current tile boundaries
+        vec2 testPos = vec2(skewedX, worldPos.y);
+        int skewedTileType = sampleTileType(testPos);
+        bool skewedIsObstacle = sampleRegion(testPos) > 0.5;
+        
+        if (skewedTileType == TILE_WALL_SIDE || (skewedIsObstacle && skewedTileType == TILE_NONE)) {
+            // Skewed position is also on a wall or obstacle - use skewed X directly
+            sampleWorldPos.x = skewedX;
+        } else {
+            // Skewed position is outside wall - clamp to tile boundary
+            float tileLeft = floor(worldPos.x / uTileSize.x) * uTileSize.x;
+            float tileRight = tileLeft + uTileSize.x;
+            sampleWorldPos.x = clamp(skewedX, tileLeft, tileRight - 0.01);
+        }
+    }
+    
     float maxDistPixels = uShadowLength * uTileSize.x;
     int hitTileType = TILE_NONE;
-    float hitDist = traceRay(worldPos, uSunDirection, maxDistPixels, tileType, worldPos.y, hitTileType);
+    float hitDist = traceRay(sampleWorldPos, uSunDirection, maxDistPixels, tileType, worldPos.y, hitTileType);
     
     float shadow = 1.0;
     
@@ -163,13 +185,10 @@ void main(void) {
         float normalizedDist = hitDist / maxDistPixels;
         
         if (uFalloffType == 0) {
-            // Sharp (none)
             shadow = 1.0 - uShadowStrength;
         } else if (uFalloffType == 1) {
-            // Linear
             shadow = 1.0 - uShadowStrength * (1.0 - normalizedDist);
         } else {
-            // Smooth
             float falloff = normalizedDist * normalizedDist;
             shadow = 1.0 - uShadowStrength * (1.0 - falloff);
         }
