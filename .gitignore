@@ -16,3 +16,5 @@ plugins/AltMenuScreen.js
 plugins/AltSaveScreen.js
 plugins/ButtonPicture.js
 plugins/TextPicture.js
+plugins/DynamicLighting/export-to-md.js
+plugins/DynamicLighting/DynamicLighting-source.md
